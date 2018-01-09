@@ -10,6 +10,7 @@ from django.http import StreamingHttpResponse, HttpResponse, FileResponse
 
 from account.decorators import problem_permission_required, ensure_created_by
 from judge.dispatcher import SPJCompiler
+from judge.languages import language_names
 from contest.models import Contest, ContestStatus
 from submission.models import Submission, JudgeStatus
 from utils.api import APIView, CSRFExemptAPIView, validate_serializer
@@ -20,7 +21,8 @@ from ..models import Problem, ProblemRuleType, ProblemTag
 from ..serializers import (CreateContestProblemSerializer, CompileSPJSerializer,
                            CreateProblemSerializer, EditProblemSerializer, EditContestProblemSerializer,
                            ProblemAdminSerializer, TestCaseUploadForm, ContestProblemMakePublicSerializer,
-                           AddContestProblemSerializer, ExportProblemSerializer, ExportProblemRequestSerialzier)
+                           AddContestProblemSerializer, ExportProblemSerializer,
+                           ExportProblemRequestSerialzier, UploadProblemForm, ImportProblemSerializer)
 
 
 class TestCaseAPI(CSRFExemptAPIView):
@@ -91,7 +93,7 @@ class TestCaseAPI(CSRFExemptAPIView):
             file = form.cleaned_data["file"]
         else:
             return self.error("Upload failed")
-        tmp_file = os.path.join("/tmp", rand_str() + ".zip")
+        tmp_file = f"/tmp/{rand_str()}.zip"
         with open(tmp_file, "wb") as f:
             for chunk in file:
                 f.write(chunk)
@@ -146,6 +148,7 @@ class TestCaseAPI(CSRFExemptAPIView):
 
         with open(os.path.join(test_case_dir, "info"), "w", encoding="utf-8") as f:
             f.write(json.dumps(test_case_info, indent=4))
+        os.remove(tmp_file)
         return self.success({"id": test_case_id, "info": ret, "hint": hint, "spj": spj})
 
 
@@ -468,7 +471,7 @@ class AddContestProblemAPI(APIView):
         return self.success()
 
 
-class ExportImportProblemAPI(APIView):
+class ExportProblemAPI(APIView):
     def choose_answers(self, user, problem):
         ret = []
         for item in problem.languages:
@@ -516,3 +519,36 @@ class ExportImportProblemAPI(APIView):
         resp["Content-Type"] = "application/zip"
         resp["Content-Disposition"] = f"attachment;filename=problem-export.zip"
         return resp
+
+
+class ImportProblemAPI(APIView):
+    request_parsers = ()
+
+    def get(self, request):
+        # form = UploadProblemForm(request.POST, request.FILES)
+        # if form.is_valid():
+        #     file = form.cleaned_data["file"]
+        #     tmp_file = f"/tmp/{rand_str()}.zip"
+        #     with open(tmp_file, "wb") as f:
+        #         for chunk in file:
+        #             f.write(chunk)
+        with zipfile.ZipFile("/Users/virusdefender/Downloads/problem-export.zip", "r") as zip_file:
+            name_list = zip_file.namelist()
+            count = 0
+            for item in name_list:
+                if "/problem.json" in item:
+                    count += 1
+            for i in range(1, count + 1):
+                with zip_file.open(f"{i}/problem.json") as f:
+                    problem_info = json.load(f)
+                    print(problem_info)
+                    serializer = ImportProblemSerializer(data=problem_info)
+                    if not serializer.is_valid():
+                        return self.error(f"Invalid problem format, error is {serializer.errors}")
+                    else:
+                        problem_info = serializer.data
+                        for item in problem_info["template"].keys():
+                            if item not in language_names:
+                                return self.error(f"Invalid language name {item}")
+
+        return self.success()
